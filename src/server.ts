@@ -43,9 +43,26 @@ async function ensureAccountsInitialized(): Promise<void> {
   }
 }
 
-// Set up process-level unhandled error/rejection handlers to prevent crashes
+// --- Process Lifecycle ---
+// Exit when the parent MCP client disconnects (stdio pipe closes).
+// Without this, the process survives indefinitely as an orphan after the client exits.
+process.stdin.on('close', () => {
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  process.exit(0);
+});
+
+// After an uncaught exception the process is in undefined state (per Node.js docs).
+// Log the error and exit rather than continuing in a potentially broken state.
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, _promise) => {
@@ -179,10 +196,6 @@ async function startServer() {
     await server.start(configToUse);
     console.error(
       `MCP Server running using ${configToUse.transportType}. Awaiting client connection...`
-    );
-
-    console.error(
-      'Process-level error handling configured to prevent crashes from timeout errors.'
     );
   } catch (startError: unknown) {
     const message = startError instanceof Error ? startError.message : String(startError);
