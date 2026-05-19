@@ -477,69 +477,87 @@ export async function completeAddAccount(
 
     const server = http.createServer((req, res) => {
       void (async () => {
-        try {
-          const url = new URL(req.url ?? '', redirectUri);
-          const code = url.searchParams.get('code');
+        const url = new URL(req.url ?? '', redirectUri);
+        const code = url.searchParams.get('code');
 
-          if (code) {
-            res.writeHead(200, { 'Content-Type': 'text/html', Connection: 'close' });
-            res.end(
-              `<html><body><h1>Authentication successful for "${accountName}"!</h1><p>You can close this window.</p></body></html>`
-            );
-
-            // Close server, clear timeout, and destroy all connections
-            clearTimeout(timeout.id);
-            server.close();
-            connections.forEach((conn) => conn.destroy());
-
-            const { tokens } = await oAuth2Client.getToken(code);
-            oAuth2Client.setCredentials(tokens);
-
-            // Get user email
-            const oauth2 = google.oauth2({ version: 'v2', auth: oAuth2Client });
-            let email: string | undefined;
-            try {
-              const userInfo = await oauth2.userinfo.get();
-              email = userInfo.data.email || undefined;
-            } catch {
-              // Email fetch failed, continue without it
-            }
-
-            // Save token
-            const tokenPath = await saveTokenForAccount(accountName, oAuth2Client);
-
-            // Update config - include credentialsPath if it was specified
-            const config = await loadAccountsConfig();
-            const accountConfig: AccountConfig = {
-              name: accountName,
-              email,
-              tokenPath,
-              ...(credentialsPath && { credentialsPath }),
-              addedAt: new Date().toISOString(),
-            };
-            // eslint-disable-next-line security/detect-object-injection -- accountName validated at function entry
-            config.accounts[accountName] = accountConfig;
-            await saveAccountsConfig(config);
-
-            resolve(accountConfig);
-          } else {
-            const error = url.searchParams.get('error');
-            res.writeHead(400, { 'Content-Type': 'text/html', Connection: 'close' });
-            res.end(
-              `<html><body><h1>Authentication failed</h1><p>${error || 'No code received'}</p></body></html>`
-            );
-            clearTimeout(timeout.id);
-            server.close();
-            connections.forEach((conn) => conn.destroy());
-            reject(new Error(error || 'No authorization code received'));
-          }
-        } catch (err) {
-          res.writeHead(500, { 'Content-Type': 'text/html', Connection: 'close' });
-          res.end('<html><body><h1>Authentication failed</h1></body></html>');
+        if (!code) {
+          const error = url.searchParams.get('error');
+          res.writeHead(400, { 'Content-Type': 'text/html', Connection: 'close' });
+          res.end(
+            `<html><body><h1>Authentication failed</h1><p>${error || 'No code received'}</p></body></html>`
+          );
           clearTimeout(timeout.id);
           server.close();
           connections.forEach((conn) => conn.destroy());
-          reject(err instanceof Error ? err : new Error(String(err)));
+          reject(new Error(error || 'No authorization code received'));
+          return;
+        }
+
+        // Do ALL persist work first, then report success/failure to the browser.
+        // Previously the success page was sent before the token exchange + write,
+        // which (a) made errors invisible and (b) raced against server.close() +
+        // conn.destroy() so the persist could silently drop.
+        try {
+          const { tokens } = await oAuth2Client.getToken(code);
+          oAuth2Client.setCredentials(tokens);
+
+          // Get user email (non-fatal if it fails)
+          const oauth2 = google.oauth2({ version: 'v2', auth: oAuth2Client });
+          let email: string | undefined;
+          try {
+            const userInfo = await oauth2.userinfo.get();
+            email = userInfo.data.email || undefined;
+          } catch {
+            // Email fetch failed, continue without it
+          }
+
+          // Save token
+          const tokenPath = await saveTokenForAccount(accountName, oAuth2Client);
+
+          // Update config - include credentialsPath if it was specified
+          const config = await loadAccountsConfig();
+          const accountConfig: AccountConfig = {
+            name: accountName,
+            email,
+            tokenPath,
+            ...(credentialsPath && { credentialsPath }),
+            addedAt: new Date().toISOString(),
+          };
+          // eslint-disable-next-line security/detect-object-injection -- accountName validated at function entry
+          config.accounts[accountName] = accountConfig;
+          await saveAccountsConfig(config);
+
+          // Read-back verification: confirm the write actually landed before
+          // telling the user it succeeded.
+          const verifyConfig = await loadAccountsConfig();
+          // eslint-disable-next-line security/detect-object-injection -- accountName validated at function entry
+          if (!verifyConfig.accounts[accountName]) {
+            throw new Error(
+              `Persist verification failed: account "${accountName}" missing from accounts.json after save`
+            );
+          }
+
+          // Now that persist succeeded, send the success page and close the server.
+          res.writeHead(200, { 'Content-Type': 'text/html', Connection: 'close' });
+          res.end(
+            `<html><body><h1>Authentication successful for "${accountName}"!</h1><p>You can close this window.</p></body></html>`
+          );
+          clearTimeout(timeout.id);
+          server.close();
+          connections.forEach((conn) => conn.destroy());
+
+          resolve(accountConfig);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[addAccount] persist failed for "${accountName}": ${message}`);
+          res.writeHead(500, { 'Content-Type': 'text/html', Connection: 'close' });
+          res.end(
+            `<html><body><h1>Authentication failed</h1><p>${message}</p><p>Please re-run addAccount.</p></body></html>`
+          );
+          clearTimeout(timeout.id);
+          server.close();
+          connections.forEach((conn) => conn.destroy());
+          reject(err instanceof Error ? err : new Error(message));
         }
       })();
     });
