@@ -10,6 +10,19 @@ import { Readable } from 'stream';
 import { validateWritePath, wrapEmailContent } from '../securityHelpers.js';
 import { getServerConfig } from '../serverWrapper.js';
 
+/**
+ * Encode a header value as an RFC 2047 encoded-word when it contains
+ * non-ASCII characters. RFC 2822 headers are ASCII-only; embedding raw UTF-8
+ * bytes makes Gmail interpret them as Latin-1, garbling the header (mojibake).
+ * ASCII-only values pass through unchanged.
+ */
+function encodeMimeHeader(value: string): string {
+  if (!value || /^[\x20-\x7e]*$/.test(value)) {
+    return value;
+  }
+  return `=?UTF-8?B?${Buffer.from(value, 'utf-8').toString('base64')}?=`;
+}
+
 export function registerGmailTools(options: GmailToolOptions) {
   const { server, getGmailClient, getDriveClient, getAccountEmail } = options;
   server.addTool({
@@ -683,7 +696,7 @@ export function registerGmailTools(options: GmailToolOptions) {
           emailContent += `To: ${args.to}\r\n`;
           if (args.cc) emailContent += `Cc: ${args.cc}\r\n`;
           if (args.bcc) emailContent += `Bcc: ${args.bcc}\r\n`;
-          emailContent += `Subject: ${args.subject}\r\n`;
+          emailContent += `Subject: ${encodeMimeHeader(args.subject)}\r\n`;
           if (inReplyTo) emailContent += `In-Reply-To: ${inReplyTo}\r\n`;
           if (references) emailContent += `References: ${references}\r\n`;
           emailContent += 'MIME-Version: 1.0\r\n';
@@ -716,7 +729,7 @@ export function registerGmailTools(options: GmailToolOptions) {
           emailContent += `To: ${args.to}\r\n`;
           if (args.cc) emailContent += `Cc: ${args.cc}\r\n`;
           if (args.bcc) emailContent += `Bcc: ${args.bcc}\r\n`;
-          emailContent += `Subject: ${args.subject}\r\n`;
+          emailContent += `Subject: ${encodeMimeHeader(args.subject)}\r\n`;
           if (inReplyTo) emailContent += `In-Reply-To: ${inReplyTo}\r\n`;
           if (references) emailContent += `References: ${references}\r\n`;
           emailContent += `Content-Type: ${args.isHtml ? 'text/html' : 'text/plain'}; charset=utf-8\r\n`;
@@ -1037,7 +1050,7 @@ export function registerGmailTools(options: GmailToolOptions) {
           emailContent += `To: ${newTo}\r\n`;
           if (newCc) emailContent += `Cc: ${newCc}\r\n`;
           if (newBcc) emailContent += `Bcc: ${newBcc}\r\n`;
-          emailContent += `Subject: ${newSubject}\r\n`;
+          emailContent += `Subject: ${encodeMimeHeader(newSubject)}\r\n`;
           emailContent += 'MIME-Version: 1.0\r\n';
           emailContent += `Content-Type: multipart/mixed; boundary="${boundary}"\r\n`;
           emailContent += '\r\n';
@@ -1068,7 +1081,7 @@ export function registerGmailTools(options: GmailToolOptions) {
           emailContent += `To: ${newTo}\r\n`;
           if (newCc) emailContent += `Cc: ${newCc}\r\n`;
           if (newBcc) emailContent += `Bcc: ${newBcc}\r\n`;
-          emailContent += `Subject: ${newSubject}\r\n`;
+          emailContent += `Subject: ${encodeMimeHeader(newSubject)}\r\n`;
           emailContent += `Content-Type: ${isHtml ? 'text/html' : 'text/plain'}; charset=utf-8\r\n`;
           emailContent += `\r\n${newBody}`;
         }
@@ -1224,7 +1237,7 @@ export function registerGmailTools(options: GmailToolOptions) {
         emailContent += `To: ${getCurrentHeader('To')}\r\n`;
         if (getCurrentHeader('Cc')) emailContent += `Cc: ${getCurrentHeader('Cc')}\r\n`;
         if (getCurrentHeader('Bcc')) emailContent += `Bcc: ${getCurrentHeader('Bcc')}\r\n`;
-        emailContent += `Subject: ${getCurrentHeader('Subject')}\r\n`;
+        emailContent += `Subject: ${encodeMimeHeader(getCurrentHeader('Subject'))}\r\n`;
         emailContent += 'MIME-Version: 1.0\r\n';
         emailContent += `Content-Type: multipart/mixed; boundary="${boundary}"\r\n`;
         emailContent += '\r\n';
@@ -1395,7 +1408,7 @@ export function registerGmailTools(options: GmailToolOptions) {
           emailContent += `To: ${getCurrentHeader('To')}\r\n`;
           if (getCurrentHeader('Cc')) emailContent += `Cc: ${getCurrentHeader('Cc')}\r\n`;
           if (getCurrentHeader('Bcc')) emailContent += `Bcc: ${getCurrentHeader('Bcc')}\r\n`;
-          emailContent += `Subject: ${getCurrentHeader('Subject')}\r\n`;
+          emailContent += `Subject: ${encodeMimeHeader(getCurrentHeader('Subject'))}\r\n`;
           emailContent += 'MIME-Version: 1.0\r\n';
           emailContent += `Content-Type: multipart/mixed; boundary="${boundary}"\r\n`;
           emailContent += '\r\n';
@@ -1425,7 +1438,7 @@ export function registerGmailTools(options: GmailToolOptions) {
           emailContent += `To: ${getCurrentHeader('To')}\r\n`;
           if (getCurrentHeader('Cc')) emailContent += `Cc: ${getCurrentHeader('Cc')}\r\n`;
           if (getCurrentHeader('Bcc')) emailContent += `Bcc: ${getCurrentHeader('Bcc')}\r\n`;
-          emailContent += `Subject: ${getCurrentHeader('Subject')}\r\n`;
+          emailContent += `Subject: ${encodeMimeHeader(getCurrentHeader('Subject'))}\r\n`;
           emailContent += `Content-Type: ${bodyMimeType}; charset=utf-8\r\n`;
           emailContent += `\r\n${bodyContent}`;
         }
