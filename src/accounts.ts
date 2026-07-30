@@ -204,12 +204,24 @@ async function loadTokenForAccount(accountName: string): Promise<OAuth2Client | 
   }
 }
 
-async function saveTokenForAccount(accountName: string, client: OAuth2Client): Promise<string> {
+// FIX 2: Accept an explicit credentialsPath so the token can be saved correctly
+// even before the account entry exists in accounts.json. Previously, passing only
+// accountName caused loadCredentials() to find no matching account in config and
+// silently fall back to the global ~/.google-mcp/credentials.json, which would
+// crash for users who stored their credentials elsewhere.
+async function saveTokenForAccount(
+  accountName: string,
+  client: OAuth2Client,
+  credentialsPath?: string
+): Promise<string> {
   await ensureConfigDir();
   const tokenPath = path.join(TOKENS_DIR, `${accountName}.json`);
 
-  // Use account-specific credentials if available
-  const { client_id, client_secret } = await loadCredentials(accountName);
+  // Use explicitly provided credentials path first, then fall back to account lookup
+  const { client_id, client_secret } = credentialsPath
+    ? await parseCredentialsFile(credentialsPath)
+    : await loadCredentials(accountName);
+
   const payload = JSON.stringify({
     type: 'authorized_user',
     client_id,
@@ -505,8 +517,10 @@ export async function completeAddAccount(
               // Email fetch failed, continue without it
             }
 
-            // Save token
-            const tokenPath = await saveTokenForAccount(accountName, oAuth2Client);
+            // FIX 2: Pass credentialsPath explicitly so saveTokenForAccount does not
+            // fall back to the global credentials file when the account entry does not
+            // exist in accounts.json yet (which is always the case at this point).
+            const tokenPath = await saveTokenForAccount(accountName, oAuth2Client, credentialsPath);
 
             // Update config - include credentialsPath if it was specified
             const config = await loadAccountsConfig();
@@ -534,8 +548,13 @@ export async function completeAddAccount(
             reject(new Error(error || 'No authorization code received'));
           }
         } catch (err) {
-          res.writeHead(500, { 'Content-Type': 'text/html', Connection: 'close' });
-          res.end('<html><body><h1>Authentication failed</h1></body></html>');
+          // FIX 1: Guard against duplicate requests (e.g. browser favicon fetch) that
+          // arrive after the success response has already been sent, which would
+          // otherwise crash the process with ERR_HTTP_HEADERS_SENT.
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'text/html', Connection: 'close' });
+            res.end('<html><body><h1>Authentication failed</h1></body></html>');
+          }
           clearTimeout(timeout.id);
           server.close();
           connections.forEach((conn) => conn.destroy());
@@ -595,7 +614,6 @@ export async function removeAccount(accountName: string): Promise<void> {
   }
 
   // Remove from config using object rest spread instead of delete
-
   const { [accountName]: _removed, ...remainingAccounts } = config.accounts;
   config.accounts = remainingAccounts;
   await saveAccountsConfig(config);
